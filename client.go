@@ -1,6 +1,7 @@
 package daisysms
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -77,44 +78,48 @@ func (c *Client) GetNumber(service Service, maxPrice ...float64) (string, string
 	return parts[1], parts[2], nil
 }
 
-func (c *Client) Wait(id string) (string, error) {
+func (c *Client) Wait(ctx context.Context, id string) (string, error) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		params := url.Values{
-			"api_key": {c.apiKey},
-			"action":  {"getStatus"},
-			"id":      {id},
-		}
-		res, err := c.Get("https://daisysms.com/stubs/handler_api.php?" + params.Encode())
-		if err != nil {
-			return "", err
-		}
-		defer res.Body.Close()
-
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			return "", err
-		}
-
-		parts := strings.Split(string(body), ":")
-		if len(parts) == 1 {
-			switch parts[0] {
-			case "STATUS_WAIT_CODE":
-				continue
-			case "NO_ACTIVATION":
-				return "", ErrWrongID
-			case "STATUS_CANCEL":
-				return "", ErrRentalCanceled
-			default:
-				return "", fmt.Errorf("unknown error: %s", parts[0])
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+			params := url.Values{
+				"api_key": {c.apiKey},
+				"action":  {"getStatus"},
+				"id":      {id},
 			}
-		}
+			res, err := c.Get("https://daisysms.com/stubs/handler_api.php?" + params.Encode())
+			if err != nil {
+				return "", err
+			}
+			defer res.Body.Close()
 
-		return parts[1], nil
+			body, err := io.ReadAll(res.Body)
+			if err != nil {
+				return "", err
+			}
+
+			parts := strings.Split(string(body), ":")
+			if len(parts) == 1 {
+				switch parts[0] {
+				case "STATUS_WAIT_CODE":
+					continue
+				case "NO_ACTIVATION":
+					return "", ErrWrongID
+				case "STATUS_CANCEL":
+					return "", ErrRentalCanceled
+				default:
+					return "", fmt.Errorf("unknown error: %s", parts[0])
+				}
+			}
+
+			return parts[1], nil
+		}
 	}
-	return "", nil
 }
 
 func (c *Client) Done(id string) error {
